@@ -1,25 +1,8 @@
 --!strict
---[[
-    Anime Adventures Hub  v0.1  (core framework)
-    Target executor: Real  (MCP-connected)
-
-    Design notes baked in on purpose:
-      * firesignal / Connection:Fire are SILENT NO-OPS in Real. Every "click"
-        goes through Util.click, which calls the handler function behind the
-        button (getconnections -> .Function) and only falls back to native
-        input if there is no handler.
-      * Nothing here assumes static GUI children in LevelSelectGui/MapSelectGui:
-        both are built at runtime from ReplicatedStorage.src.Data.Levels.
-      * Every action verifies its own result and returns ok, reason - so the
-        scheduler can retry instead of assuming a click landed.
-]]
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
--- The autoexec copy is re-run by the executor on every DataModel load (including
--- the teleport into an event run), and at that moment LocalPlayer is still nil -
--- index it once and every teleport silently kills the hub.
 local LP = Players.LocalPlayer
 while not LP do
     task.wait(0.2)
@@ -27,68 +10,52 @@ while not LP do
 end
 local PGUI = LP:WaitForChild("PlayerGui")
 
--- ============================================================================
--- Config
--- ============================================================================
-
 local Config = {
     debug = true,
     notifyOnScreen = true,
 
-    -- In-game loop -----------------------------------------------------------
     inGame = {
         autoStart = false,
-        autoReplay = false,        -- off by default: enable once the flows are verified
-        autoSkip = false,          -- off by default (text match is too loose to trust yet)
-        autoLeaveAtWave = 0,      -- 0 = off, else return to lobby at this wave
-        autoSellAtWave = 0,       -- 0 = off, else sell all placed units at this wave
-        autoAbilities = false,    -- low priority per your friend's note
+        autoReplay = false,
+        autoSkip = false,
+        autoLeaveAtWave = 0,
+        autoSellAtWave = 0,
+        autoAbilities = false,
         startTimeout = 25,
         lobbyTimeout = 40,
     },
 
-    -- Lobby ------------------------------------------------------------------
     lobby = {
-        -- which mode the auto-joiner should cycle
-        mode = "story",           -- "story" | "challenge" | "legend" | "event" | "portal" | "raid"
-        stageId = "",             -- level id from ReplicatedStorage.src.Data.Levels
-        difficulty = "Normal",    -- Normal | Hard | ... as the stage allows
-        eventName = "",           -- April Fools / Assassin / ...
-        matchmake = false,        -- cross-server matchmaking (captcha gate)
+        mode = "story",
+        stageId = "",
+        difficulty = "Normal",
+        eventName = "",
+        matchmake = false,
         retryDelay = 3,
         maxRetries = 6,
     },
 
-    -- April Fools event (verified live 2026-10-22) ---------------------------
-    -- Flow: request_join_lobby(event lobby) -> teleport to the event lobby ->
-    -- VoteStart.Yes -> the run starts. No captcha on this path; the captcha
-    -- watcher still covers the queue-based path (request_matchmaking).
     event = {
-        enabled = false,           -- master switch for the auto loop
+        enabled = false,
         lobby = "_lobbytemplate_event3",
         level = "april2_event",
         difficulty = "Hard",
-        voteStart = true,          -- press VoteStart.Yes when it shows up
-        autoPlace = true,          -- place the 6 equipped units along the path
-        autoPick = true,           -- pick the roguelike card when the run asks
-        placeDelay = 0.7,          -- seconds between placements (server rate limit)
-        leaveAtWave = 0,           -- 0 = never; else teleport back to lobby at this wave
-        leaveAfterMatch = true,    -- leave when _DATA.GameFinished flips true
-        rejoinDelay = 5,           -- seconds between loop actions inside the match
-        joinDelay = 8,             -- seconds between join attempts in the hub
-        places = { 14229762361, 14918509670 },  -- event lobby / event run place ids
+        voteStart = true,
+        autoPlace = true,
+        autoPick = true,
+        placeDelay = 0.7,
+        leaveAtWave = 0,
+        leaveAfterMatch = true,
+        rejoinDelay = 5,
+        joinDelay = 8,
+        places = { 14229762361, 14918509670 },
     },
 
-    -- Macro ------------------------------------------------------------------
     macro = {
         path = "AAHub/macros",
         autoPlayOnReplay = false,
     },
 }
-
--- ============================================================================
--- Util
--- ============================================================================
 
 local Util = {}
 local Log = {}
@@ -106,7 +73,6 @@ function Util.warn(msg)
     warn("[AAHub] " .. msg)
 end
 
--- Resolve "QuestsUI/Main/Main/Main/QuestGroups/Buttons/story" without exploding.
 function Util.find(path: string, root: Instance?): Instance?
     local node: Instance? = root or PGUI
     for part in string.gmatch(path, "[^/]+") do
@@ -126,8 +92,6 @@ function Util.waitFor(path: string, timeout: number?, root: Instance?): Instance
     return nil
 end
 
--- The only click primitive that actually works in Real.
--- Returns ok, detail.
 function Util.click(btn: GuiButton?, root: Instance?): (boolean, string)
     if not btn then return false, "button is nil" end
     if not btn:IsA("GuiButton") then return false, "not a GuiButton" end
@@ -150,8 +114,6 @@ function Util.click(btn: GuiButton?, root: Instance?): (boolean, string)
     end
 
     if calls == 0 then
-        -- No Lua handler we can reach: fall back to native input at the button's
-        -- screen position. Requires the Roblox window to be focused.
         return Util.nativeClick(btn)
     end
     return true, string.format("%d handler(s) called, %d error(s)", calls, errors)
@@ -176,7 +138,6 @@ function Util.nativeClick(btn: GuiButton?): (boolean, string)
     return clicked, clicked and ("native click at " .. x .. "," .. y) or "mouse1click failed"
 end
 
--- Wait until predicate is true. Returns ok, elapsed.
 function Util.waitUntil(predicate: () -> boolean, timeout: number?, label: string?): (boolean, number)
     local t0 = os.clock()
     local limit = timeout or 10
@@ -196,8 +157,6 @@ function Util.isVisible(inst: Instance?): boolean
     return ok and vis == true
 end
 
--- Visible all the way up to (but not including) the ScreenGui, whose Enabled is
--- checked separately. Needed because halves of a panel keep Visible = true.
 function Util.isShown(inst: Instance?): boolean
     if not inst then return false end
     local node: Instance? = inst
@@ -220,7 +179,6 @@ function Util.firstVisible(parent: Instance?, names: { string }): GuiButton?
     return nil
 end
 
--- Every visible GuiButton under a GUI whose Text/Name matches one of the words.
 function Util.findByText(root: Instance?, words: { string }): GuiButton?
     if not root then return nil end
     local lower = {}
@@ -240,13 +198,6 @@ function Util.findByText(root: Instance?, words: { string }): GuiButton?
     end
     return nil
 end
-
--- ============================================================================
--- UI  (built-in Rayfield-style window - no external dependency)
--- ============================================================================
--- Left rail tabs, dark panel, toggles/steppers wired straight into Config.
--- RightShift shows/hides. Everything is created from scratch so it works with
--- no HTTP, no loadstring, and no external library.
 
 local UI = {}
 local statusLabel: TextLabel? = nil
@@ -306,7 +257,6 @@ function UI.init()
     gui.Parent = parent
     rootGui = gui
 
-    -- ------------------------------------------------------------------ window
     local win = Instance.new("Frame")
     win.Name = "Window"
     win.Size = UDim2.fromOffset(560, 428)
@@ -327,7 +277,7 @@ function UI.init()
     top.Parent = win
     round(top, 10)
 
-    local topFix = Instance.new("Frame")           -- square off the bottom corners
+    local topFix = Instance.new("Frame")
     topFix.Size = UDim2.new(1, 0, 0, 12)
     topFix.Position = UDim2.new(0, 0, 1, -12)
     topFix.BackgroundColor3 = THEME.rail
@@ -342,7 +292,7 @@ function UI.init()
     title.TextSize = 14
     title.TextColor3 = THEME.text
     title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "AAHub  Â·  Anime Adventures"
+    title.Text = "AAHub - Anime Adventures"
     title.Parent = top
 
     local ver = Instance.new("TextLabel")
@@ -364,12 +314,11 @@ function UI.init()
     close.Font = Enum.Font.GothamBold
     close.TextSize = 14
     close.TextColor3 = THEME.bad
-    close.Text = "Ã—"
+    close.Text = "X"
     close.Parent = top
     round(close, 6)
     close.MouseButton1Click:Connect(function() gui.Enabled = false end)
 
-    -- drag
     local dragging, dragStart, startPos = false, nil, nil
     top.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -402,7 +351,6 @@ function UI.init()
         end)
     end)
 
-    -- -------------------------------------------------------------------- rail
     local rail = Instance.new("Frame")
     rail.Size = UDim2.new(0, 138, 1, -38)
     rail.Position = UDim2.fromOffset(0, 38)
@@ -452,7 +400,6 @@ function UI.init()
     lbl.Parent = statusBar
     statusLabel = lbl
 
-    -- ------------------------------------------------------------- components
     local function page(): ScrollingFrame
         local s = Instance.new("ScrollingFrame")
         s.Size = UDim2.fromScale(1, 1)
@@ -544,7 +491,6 @@ function UI.init()
             knob.Position = UDim2.new(0, now and 23 or 3, 0.5, -7)
         end)
 
-        -- keep the visual honest when something else flips the flag
         task.spawn(function()
             while pill.Parent do
                 local on = getter()
@@ -640,7 +586,6 @@ function UI.init()
         return t
     end
 
-    -- -------------------------------------------------------------------- pages
     local pages = {}
     local tabs = { { "Main", "main" }, { "Event", "event" }, { "Macro", "macro" }, { "Log", "log" } }
     local tabButtons = {}
@@ -673,7 +618,6 @@ function UI.init()
         y += 38
     end
 
-    -- main page
     local main = pages.main
     heading(main, "Automation")
     toggle(main, "Auto event (join + vote + place)", function()
@@ -709,7 +653,6 @@ function UI.init()
         local h = hub(); if h then h.Event.leave() end
     end)
 
-    -- event page
     local ev = pages.event
     heading(ev, "Event loop")
     toggle(ev, "Auto pick cards", function()
@@ -742,7 +685,6 @@ function UI.init()
         end
     end)
 
-    -- macro page
     local mc = pages.macro
     heading(mc, "Record / play")
     toggle(mc, "Auto replay after a run", function()
@@ -765,7 +707,6 @@ function UI.init()
         local h = hub(); if h then h.Macro.play() end
     end)
 
-    -- log page
     local lg = pages.log
     heading(lg, "Console")
     local logBox = info(lg, "")
@@ -800,14 +741,8 @@ function UI.status(text: string)
     Util.log("status: %s", text)
 end
 
--- ============================================================================
--- InGame
--- ============================================================================
-
 local InGame = {}
 
--- Status of the run. The server keeps `_wave_num` in Workspace for every live
--- run, so this reads the same value the HUD reads instead of guessing from text.
 function InGame.getWave(): number?
     local w = workspace:FindFirstChild("_wave_num")
     if w and w:IsA("ValueBase") then
@@ -831,8 +766,6 @@ function InGame.isFinished(): boolean
     return done ~= nil and done:IsA("BoolValue") and done.Value == true
 end
 
--- Event challenges end on a results panel with a Next button; story runs have
--- Replay. Both are handled here so the auto loop does not care which mode it is.
 function InGame.resultsButton(): GuiButton?
     local r = PGUI:FindFirstChild("ResultsUI")
     if not r then return nil end
@@ -859,8 +792,6 @@ function InGame.start(): (boolean, string)
 end
 
 function InGame.replay(): (boolean, string)
-    -- Replay lives on the post-run results panel; find it by text so we do not
-    -- depend on a path that changes per game mode.
     local btn = Util.findByText(PGUI, { "replay" })
     if not btn then return false, "replay button not found" end
     local ok, detail = Util.click(btn)
@@ -885,7 +816,6 @@ function InGame.autoSkip(): (boolean, string)
 end
 
 function InGame.sellAll(): (boolean, string)
-    -- Prefer the remote: it is stable across GUI layout changes.
     local rs = game:GetService("ReplicatedStorage")
     for _, name in ipairs({ "sell_units", "sell_all_units", "autosell_units" }) do
         local remote = rs:FindFirstChild(name, true)
@@ -931,14 +861,8 @@ function InGame.tick()
     InGame.guardWaves()
 end
 
--- ============================================================================
--- Lobby
--- ============================================================================
-
 local Lobby = {}
 
--- v0.1: prove we can open the quest board (story/event tabs) from the lobby.
--- Stage/map/difficulty selection is added once the dynamic lists are mapped.
 function Lobby.openQuests(): (boolean, string)
     local btn = Util.find("QuestsUI/Main/Main/Main/QuestGroups/Buttons/story")
     if not btn then return false, "story tab missing" end
@@ -956,12 +880,7 @@ function Lobby.openTab(kind: string): (boolean, string)
 end
 
 function Lobby.tick()
-    -- placeholder: auto-join sequence lands here
 end
-
--- ============================================================================
--- Macro  (record / play)
--- ============================================================================
 
 local Macro = {}
 
@@ -1033,14 +952,6 @@ function Macro.play(events: { any }?)
     return true, string.format("playing %d events", #seq)
 end
 
--- ============================================================================
--- Matchmaking  (April Fools event, verified live on 2026-10-22)
--- ============================================================================
--- The captcha is a plain TextLabel ("Captcha") inside
--- NotificationWindows.Popups.CaptchaWindow - no OCR needed. Fill TypeBox, press
--- ButtonHolder.Yes. The window is a live clone; Popups.PopupTemplate.CaptchaWindow
--- is only the template and must be ignored.
-
 local Matchmaking = {}
 
 Matchmaking.eventLobby = "_lobbytemplate_event3"
@@ -1078,10 +989,7 @@ function Matchmaking.solveCaptcha(): (boolean, string)
     return ok, code
 end
 
--- Watches for the captcha for as long as the script runs. Cheap: one child lookup
--- per tick, and only does work when a captcha is actually up.
 function Matchmaking.watchCaptchas(interval: number?)
-    -- one watcher only: re-running the hub must not stack a second solver
     local prev = (getgenv() :: any).AAHubCaptchaThread
     if type(prev) == "thread" then
         pcall(task.cancel, prev)
@@ -1112,8 +1020,6 @@ function Matchmaking.status(): string
         e and (e :: TextLabel).Text or "")
 end
 
--- The event card in ContractsUI. This is the same button a human presses: it opens
--- the matchmaking popup, and the popup's own handler invokes request_matchmaking.
 function Matchmaking.eventContractButton(): GuiButton?
     local c = PGUI:FindFirstChild("ContractsUI")
     if not c then return nil end
@@ -1133,7 +1039,6 @@ function Matchmaking.joinEvent(): (boolean, string)
     return ok, detail
 end
 
--- Raw fallback: the exact remotes the client uses itself.
 function Matchmaking.invoke(kind: string, ...): (boolean, any)
     local rs = game:GetService("ReplicatedStorage")
     local c2s = rs:FindFirstChild("endpoints") and rs.endpoints:FindFirstChild("client_to_server")
@@ -1146,17 +1051,10 @@ function Matchmaking.invoke(kind: string, ...): (boolean, any)
     return ok, res
 end
 
-
--- ============================================================================
--- AutoPick  (roguelike "Choose a card!" prompt)
--- ============================================================================
--- The run stalls until a card is picked: RoguelikeSelect.Main.Main.Items holds
--- OptionFrame{Button, Confirm} per card. Select one, then Confirm.
-
 local AutoPick = {
     lastAction = 0,
     picks = 0,
-    prefer = "AprilCoins",     -- pick the card with the best AprilCoins bonus
+    prefer = "AprilCoins",
 }
 
 function AutoPick.prompt(): Instance?
@@ -1200,7 +1098,6 @@ function AutoPick.tick()
     local now = os.clock()
     if now - AutoPick.lastAction < 0.6 then return end
 
-    -- a card is already selected -> confirm it
     for _, d in ipairs(root:GetDescendants()) do
         if d:IsA("GuiButton") and d.Name == "Confirm" and Util.isShown(d) and onScreen(d) then
             AutoPick.lastAction = now
@@ -1219,19 +1116,10 @@ function AutoPick.tick()
     end
 end
 
-
--- ============================================================================
--- AutoPlace  (verified live 2026-10-22)
--- ============================================================================
--- The 6 unit slots are spawn_units.Lives.Frame.Units.1..6 and each button carries
--- the equipped unit's uuid in its `_equipped_frame_unit_uuid` attribute. The game
--- itself places with spawn_unit(uuid, CFrame) - a Vector3 is rejected server side
--- ("LookVector is not a valid member of Vector3"), so always pass a CFrame.
-
 local AutoPlace = {
-    placed = {},        -- button name -> true, only after the unit is on the map
-    tries = {},         -- button name -> attempt count
-    skipped = {},       -- button name -> true after giving up for this run
+    placed = {},
+    tries = {},
+    skipped = {},
     fails = 0,
     lastPlace = 0,
     lastCashWarn = 0,
@@ -1260,19 +1148,6 @@ function AutoPlace.uuidOf(btn: GuiButton): any
     return nil
 end
 
--- The exact ground beside the path, where the game actually accepts a unit.
--- Verified live 2026-10-22:
---   * spawn_unit(uuid, CFrame) IS the placement call, and it is accepted when
---     the CFrame sits on the ground *beside* the route (cash drops by the price).
---   * the server silently drops a spot over the path itself, a spot floating
---     above the ground (+1 stud already fails) or a spot far from the map.
--- So: walk perpendicular from the road centre, raycast straight down and keep
--- the exact hit position. Several radii per side give the retry loop somewhere
--- else to try when a neighbour already occupies a spot.
--- One shared RaycastParams, created with the rest of the module: creating an
--- Instance from inside the scheduler thread intermittently fails with
--- "cannot access 'Instance' (lacking capability Plugin)" and silently kills a
--- placement tick.
 local RayParams = RaycastParams.new()
 RayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -1302,9 +1177,6 @@ function AutoPlace.candidates(index: number, total: number): { CFrame }
         end
     end
 
-    -- the slot's own stretch of the route first, then the whole route: a slot whose
-    -- neighbourhood is already crowded still finds ground, and the map itself
-    -- changes between runs (bridges, upper decks) so every stretch is a candidate.
     local baseIdx = math.clamp(math.floor(((index - 0.5) / math.max(1, total)) * #parts) + 1, 1, #parts)
     local order = {}
     for step = 0, #parts - 1 do
@@ -1312,7 +1184,6 @@ function AutoPlace.candidates(index: number, total: number): { CFrame }
     end
     local limit = math.min(#order, 8)
 
-    -- positions already taken by any unit, so a candidate never lands on a neighbour
     local taken = {}
     if units then
         for _, unit in ipairs(units:GetChildren()) do
@@ -1345,7 +1216,6 @@ function AutoPlace.candidates(index: number, total: number): { CFrame }
                 end)
                 if ok and hit then
                     local ground = hit.Position
-                    -- same level as the road (skips bridges / decks above the route)
                     local level = math.abs(ground.Y - part.Position.Y)
                     local free = true
                     for _, p in ipairs(taken) do
@@ -1372,8 +1242,6 @@ function AutoPlace.reset()
     AutoPlace.done = false
 end
 
--- The unit's model name lives inside the slot's viewport, and the price in
--- Cost.text. Both are what the game itself shows, so no guessing.
 function AutoPlace.nameOf(btn: GuiButton): string?
     local wm = btn:FindFirstChild("WorldModel", true)
     if not wm then return nil end
@@ -1394,11 +1262,6 @@ function AutoPlace.costOf(btn: GuiButton): number?
     return best
 end
 
--- Placed units are real models in workspace._UNITS carrying a _stats folder:
---   _stats.id     -> the real unit id (saber_evolved, not the card label "saber")
---   _stats.player -> the owner's username, so our own units are countable
--- spawn_unit returns nil whether the server takes the call or drops it, so the
--- count (and the cash label) is the only honest success signal.
 function AutoPlace.myUnits(): number
     local units = workspace:FindFirstChild("_UNITS")
     if not units then return 0 end
@@ -1407,9 +1270,6 @@ function AutoPlace.myUnits(): number
     for _, c in ipairs(units:GetChildren()) do
         local stats = c:FindFirstChild("_stats")
         local owner = stats and stats:FindFirstChild("player")
-        -- the owner value has been seen as both a StringValue and a plain
-        -- string depending on how the server replicated the model, so compare
-        -- the value, not the class
         if owner and tostring(owner.Value) == me then
             n += 1
         end
@@ -1417,9 +1277,6 @@ function AutoPlace.myUnits(): number
     return n
 end
 
--- Cash lives in spawn_units as the big yellow number just above the unit bar.
--- Reading it lets the scheduler wait instead of firing a placement it cannot pay
--- for (the server drops those without a word).
 function AutoPlace.cash(): number?
     local su = PGUI:FindFirstChild("spawn_units")
     if not su then return nil end
@@ -1438,8 +1295,6 @@ function AutoPlace.cash(): number?
     return best
 end
 
--- Places exactly one unit per call so the scheduler never blocks for long, and
--- only marks it placed once the game shows it landed (unit count or cash).
 function AutoPlace.tick()
     if not Config.event.autoPlace then return end
     local wave = InGame.getWave()
@@ -1450,9 +1305,6 @@ function AutoPlace.tick()
     local btns = AutoPlace.buttons()
     if #btns == 0 then return end
 
-    -- cheapest first: a level 100 team is expensive and cash only trickles in.
-    -- Empty slots render as "unselected_unit" - there is nothing to place there,
-    -- so they must not count towards "all units placed".
     local queue = {}
     local placeable = 0
     for i, btn in ipairs(btns) do
@@ -1462,8 +1314,6 @@ function AutoPlace.tick()
             placeable += 1
             local attempts = AutoPlace.tries[btn.Name] or 0
             if attempts >= 20 then
-                -- one stubborn slot (stale uuid, unplaceable unit) must never
-                -- starve the rest of the team for the whole run
                 if not AutoPlace.skipped[btn.Name] then
                     AutoPlace.skipped[btn.Name] = true
                     Util.log("giving up on %s after %d attempts", name, attempts)
@@ -1542,17 +1392,6 @@ function AutoPlace.count(): number
     return n
 end
 
-
--- ============================================================================
--- Event  (April Fools auto-join, verified live on 2026-10-22)
--- ============================================================================
--- Two ways into the event:
---   queue  : request_lock_level + request_matchmaking (captcha gate)
---   lobby  : request_join_lobby("_lobbytemplate_event3") teleports you into the
---            event lobby, VoteStart.Yes starts the run. No captcha, no queue.
--- The lobby path is what the loop below uses: it is the one that was proven end
--- to end on a live client.
-
 local Event = {}
 
 function Event.inMatch(): boolean
@@ -1566,14 +1405,11 @@ function Event.matchEnded(): boolean
     return InGame.isFinished()
 end
 
--- The event lobby is the only place with a VoteStart prompt.
 function Event.inEventLobby(): boolean
     local vs = PGUI:FindFirstChild("VoteStart")
     return vs ~= nil and vs:IsA("ScreenGui") and vs.Enabled == true
 end
 
--- Place ids the April Fools event teleports between. Used to tell "waiting for
--- the run to start" apart from "sitting in the main hub".
 function Event.inEventPlace(): boolean
     local id = game.PlaceId
     for _, v in ipairs(Config.event.places) do
@@ -1610,7 +1446,6 @@ function Event.leave(): (boolean, string)
     return ok, tostring(res)
 end
 
--- One press does the whole thing: enter the lobby if needed, then vote.
 function Event.start(): (boolean, string)
     if Event.inEventLobby() then
         return Event.voteStart()
@@ -1633,7 +1468,6 @@ function Event.status(): string
     return "hub"
 end
 
--- The loop. Exactly one action per tick, no waits, no blocking calls.
 local EventLoop = {
     running = false,
     matches = 0,
@@ -1646,11 +1480,10 @@ function EventLoop.tick()
     if not Config.event.enabled then return end
     local now = os.clock()
 
-    -- ---- in a run ----------------------------------------------------------
     if Event.inMatch() then
         if not EventLoop.inRun then
             EventLoop.inRun = true
-            AutoPlace.reset()            -- a fresh run gets a fresh set of placements
+            AutoPlace.reset()
         end
 
         local wave = InGame.getWave()
@@ -1661,7 +1494,7 @@ function EventLoop.tick()
 
         local leaveAt = Config.event.leaveAtWave
         if leaveAt > 0 and wave and wave >= leaveAt then
-            Config.event.leaveAtWave = 0          -- fire once
+            Config.event.leaveAtWave = 0
             EventLoop.lastAction = now
             Event.leave()
             return
@@ -1680,22 +1513,16 @@ function EventLoop.tick()
 
     EventLoop.inRun = false
 
-    -- ---- in the event lobby: vote ------------------------------------------
     if Event.inEventLobby() then
         if now - EventLoop.lastAction < 4 then return end
         EventLoop.lastAction = now
         if not Config.event.voteStart then return end
-        if EventLoop.votes >= 3 then return end   -- never hammer the vote button
+        if EventLoop.votes >= 3 then return end
         EventLoop.votes += 1
         Event.voteStart()
         return
     end
 
-    -- ---- inside an event place but the run has not started ------------------
-    -- The match only flips _DATA.GameStarted once players load in, and during
-    -- that window every tick used to fire request_join_lobby while in the run
-    -- place, where that remote does not exist ("remote missing" every 8s).
-    -- Wait for the run, and if it never starts, leave instead of idling forever.
     if Event.inEventPlace() then
         EventLoop.placeSince = EventLoop.placeSince or now
         if now - EventLoop.placeSince > 120 and now - EventLoop.lastAction > 10 then
@@ -1708,18 +1535,13 @@ function EventLoop.tick()
     end
     EventLoop.placeSince = nil
 
-    -- ---- in the hub: enter the event lobby ----------------------------------
     if now - EventLoop.lastAction < Config.event.joinDelay then return end
-    -- the endpoints folder only exists once the lobby has replicated; firing
-    -- earlier just logs "remote missing" noise
     local rs = game:GetService("ReplicatedStorage")
     if not (rs:FindFirstChild("endpoints") and rs.endpoints:FindFirstChild("client_to_server")) then return end
     EventLoop.lastAction = now
     local ok, detail = Event.joinLobby()
     Util.log("event join -> %s", detail)
     if ok then
-        -- the teleport takes a few seconds; without this the next tick fires
-        -- request_join_lobby again and logs a confusing "-> false"
         EventLoop.lastAction = now + 12
     else
         UI.status("event join failed: " .. detail)
@@ -1741,11 +1563,6 @@ function EventLoop.stop()
     Util.log("auto event loop disabled")
 end
 
-
--- ============================================================================
--- Scheduler
--- ============================================================================
-
 local Hub = {}
 
 function Hub.step()
@@ -1761,11 +1578,6 @@ function Hub.step()
     end)
     if not ok then
         local text = tostring(err)
-        -- Running the game's own GUI handlers from the scheduler thread can trip
-        -- Roblox's capability sandbox ("cannot access 'Instance' (lacking
-        -- capability Plugin)"). The handler's remote call has already gone out by
-        -- then - the card pick and placement still land - so it is noise, not a
-        -- failed action. Report it once and keep the log readable.
         if text:find("lacking capability", 1, true) then
             if not Hub.capWarned then
                 Hub.capWarned = true
@@ -1781,7 +1593,6 @@ function Hub.start()
     UI.init()
     UI.status("loaded")
 
-    -- one scheduler only: re-running the hub must not stack a second loop
     local prev = (getgenv() :: any).AAHubThread
     if type(prev) == "thread" then
         pcall(task.cancel, prev)
